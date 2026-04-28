@@ -3,6 +3,8 @@ import output
 import graph
 import numpy as np
 import matplotlib.pyplot as plt
+import cv2
+
 NX = 20#格子 x 轴 数目 （格点数）
 NY = 20#格子 y 轴 数目（格点数）
 Q = 9  # D2Q9 有九个方向
@@ -23,7 +25,7 @@ U_pre = np.ones((NX, NY, 2), dtype = np.float64)
 #密度分布函数
 f = np.zeros((NX, NY, Q), dtype = np.float64)
 #初始化
-def initial():
+def init():
     for i in range(NX):
         for j in range(NY):
             Rho[i][j] = Rho0
@@ -31,30 +33,39 @@ def initial():
             #以平衡态分布函数作为初始的密度分布函数
             for m in range(Q):
                 f[i][j][m] = simulation.feq(m, Rho[i][j], U[i][j][0], U[i][j][1])#按平衡态分布
+
 #定义一个墙壁的格子，1代表墙壁，0代表流体
-block = np.zeros((NX, NY), dtype = np.int32)
-#在中间放一个障碍物
-for i in range(8, 12):
-    for j in range(8, 12):
-        block[i][j] = 1
-initial()
-max_iter = 10000
-for n in range(max_iter):
-    U_pre = np.copy(U)
-    f, Rho, U, UU = simulation.evolution(NX, NY, f, Rho, U, UU, tau, block ,G, Q ,e, ww, re)
-    if(n % 1000 == 0):
-        print('Iter: {}, Error: {}'.format(n, simulation.error(U, U_pre)))
-        output.writetecplot(NX, NY, Rho, U, n)
-        x = np.arange(0, NX, 1)
-        y = np.arange(0, NY, 1)
-        xx, yy = np.meshgrid(x, y)
-        fig, ax = plt.subplots()
-        ax.contourf(yy, xx, UU, color = "k")
-        ax.quiver(yy, xx, U[:,:,0], U[:,:,1])
-        fig.savefig('velocity_field_{:08d}.png'.format(n))
-    if(simulation.error(U, U_pre) < 1e-6):
-        print('Converged at Iter: {}, Error: {}'.format(n, simulation.error(U, U_pre)))
-        output.writetecplot(NX, NY, Rho, U, n)
-        break
+if __name__ == "__main__":
+    block = np.zeros((NX, NY), dtype = np.int32)
+    #在中间放一个障碍物
+    for i in range(8, 12):
+        for j in range(8, 12):
+            block[i][j] = 1
+    init()
+    max_iter = 500
+    imgs=[]
+    for n in range(max_iter):
+        U_pre = np.copy(U)
+        f, Rho, U, UU = simulation.evolution(NX, NY, f, Rho, U, UU, tau, block ,G, Q ,e, ww, re)
+        if(n % 5 == 0):#每5步输出一次结果
+            print('Iter: {}, Error: {}'.format(n, simulation.error(U, U_pre)))
+            #output.writetecplot(NX, NY, Rho, U, n)
+            pic=output.draw_velocity_field(NX, NY, U, UU,n, save_fig=False)
+            imgs.append(pic)
+        if(simulation.error(U, U_pre) < 2e-5):#误差足够小，认为收敛
+            print('Converged at Iter: {}, Error: {}'.format(n, simulation.error(U, U_pre)))
+            output.writetecplot(NX, NY, Rho, U, n)
+            pic=output.draw_velocity_field(NX, NY, U, UU, n, save_fig=False)
+            imgs.append(pic)
+            break
+    #将结果做成视频
+    output_video = 'lbm_simulation.mp4'
+    height, width, layers = imgs[0].shape
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    video = cv2.VideoWriter(output_video, fourcc, 5, (width, height))
+    for img in imgs:
+        video.write(cv2.cvtColor(img, cv2.COLOR_RGBA2BGR))
+    video.release()
+    
 
     
