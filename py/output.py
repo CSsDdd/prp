@@ -1,6 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
-def writetecplot(NX, NY, rho, U, n):
+import os 
+def clear_output():
+    for filename in os.listdir('.'):
+        if filename.startswith('output_') and filename.endswith('.dat'):
+            os.remove(filename)
+        if filename.startswith('velocity_field_') and filename.endswith('.png'):
+            os.remove(filename)
+
+def writetecplot(NY, NX, rho, U, n):
     filename = 'output_{:08d}.dat'.format(n)
     with open(filename, 'w') as f:
         f.write('TITLE = "LBM Simulation"\n')
@@ -10,13 +18,14 @@ def writetecplot(NX, NY, rho, U, n):
             for i in range(NX):
                 f.write('{} {} {} {} {}\n'.format(i, j, rho[j][i], U[j][i][0], U[j][i][1]))#ij调换以和c++版本保持一致（虽然我不是很清楚）
 
-def draw_velocity_field(NX, NY, U, UU, n, save_fig=False):
-    x = np.arange(0, NX, 1)
-    y = np.arange(0, NY, 1)
-    xx, yy = np.meshgrid(x, y)
+def draw_velocity_field(NY, NX, U, UU, Rho, n, save_fig=False):
+    x = np.arange(0, NY, 1)
+    y = np.arange(0, NX, 1)
+    xx, yy = np.meshgrid(y, x)#符合矩阵行为,生成NY*NX的坐标矩阵
     fig, ax = plt.subplots()
-    ax.contourf(yy, xx, UU, color = "k")
-    ax.quiver(yy, xx, U[:,:,0], U[:,:,1])
+    print(xx.shape,yy.shape,Rho.shape)
+    ax.contourf(xx, yy, Rho, color = "k")
+    ax.quiver(xx, yy, U[:,:,0], U[:,:,1])
     if(save_fig):
         fig.savefig('velocity_field_{:08d}.png'.format(n))
     fig.canvas.draw()

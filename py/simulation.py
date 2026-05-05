@@ -15,22 +15,28 @@ def evolution(NX, NY, f, Rho, U, UU, tau, block ,G=0, Q=QD2Q9 ,e=eD2Q9, ww=wwD2Q
     #求碰撞之后的密度分布函数
     for i in range(NX):
         for j in range(NY):
+            if(block[i][j] == 1):#如果是墙壁格子，不进行操作
+                continue
             for m in range(Q):
-                f_col[i][j][m] = f[i][j][m] + (feq(m, Rho[i][j], U[i][j][0], U[i][j][1], e, ww, re) - f[i][j][m]) / tau + 3.0 * ww[m] * G * e[m][0];#计算碰撞
+                f_col[i][j][m] = f[i][j][m] + (feq(m, Rho[i][j], U[i][j][0], U[i][j][1], e, ww, re) - f[i][j][m]) / tau + 3.0 * ww[m] * G[0] * e[m][0]+ 3.0 * ww[m] * G[1] * e[m][1];#计算碰撞
     #密度函数量的迁移加边界条件
     for i in range(NX):
         for j in range(NY):
+            if(block[i][j] == 1):#如果是墙壁格子，不进行操作
+                continue
             for m in range(Q):
                 #i方向用余数的方法来获得周期性
                 ip = (i - e[m][0] + NX) % NX
                 jp = j - e[m][1]#计算j方向预期坐标
-                if(jp < 0 or jp >= NY or block[i][j] == 1):#如果碰到边界或者墙壁
+                if(jp < 0 or jp >= NY or block[ip][jp] == 1):#如果碰到边界或者墙壁
                     f[i][j][m] = f_col[i][j][re[m]]#如果碰到墙壁，碰撞后会反方向速度回到同一点
                 else:
                     f[i][j][m] = f_col[ip][jp][m]#不碰撞就迁移
     #用迁移后的密度分布函数求宏观量
     for i in range(NX):
         for j in range(NY):
+            if(block[i][j] == 1):#如果是墙壁格子，不进行操作
+                continue
             Rho[i][j] = 0.#准备叠加
             U[i][j] = [0.,0.]#准备叠加
             for m in range(Q):
