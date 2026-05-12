@@ -5,14 +5,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import cv2
 
-NX = 60#格子 x 轴 数目（格点数）
-NY = 20#格子 y 轴 数目 （格点数）
+NX = 600#格子 x 轴 数目（格点数）
+NY = 200#格子 y 轴 数目 （格点数）
 Q = 9  # D2Q9 有九个方向
 Rho0 = 1.0 # 密度
-U0 = [0.001,0.0005] # 速度向量 （vx,vy）
-Vis = 0.6/3 #运动粘度 
-G = [0.0001, 0.00005] # 压力梯度
-tau = 3 * Vis + 0.5 # 这里根据运动粘度算出 松弛时间
+G = [0,0] # 压力梯度
 e = np.array([[0,0],[1,0],[0,1],[-1,0],[0,-1],[1,1],[-1,1],[-1,-1],[1,-1]])
 #定义一个相反的方向量作为反弹边界的方向判定
 re = np.array([0,3,4,1,2,7,8,5,6])#相反方向索引
@@ -25,7 +22,7 @@ U_pre = np.ones((NY, NX, 2), dtype = np.float64)
 #密度分布函数
 f = np.zeros((NY, NX, Q), dtype = np.float64)
 #初始化
-def init():
+def init(U0,block,Rho0):
     for i in range(NY):
         for j in range(NX):
             if(block[i][j] == 1):#如果是墙壁格子，密度为0，速度为0
@@ -46,31 +43,41 @@ if __name__ == "__main__":
     '''for i in range(8, 12):
         for j in range(20, 40):
             block[i][j] = 1'''
-    init()
+    
+    Re = float(input("enter Re"))#输入雷诺数
+    U1=float(input("enter Ux"))#输入初始速度x
+    U2=float(input("enter Uy"))#输入初始速度y
+    U0 = [U1,U2]
+    viu = np.sqrt(U1*U1+U2*U2)*NY/Re#根据雷诺数计算粘度
+    tau = 3*viu + 0.5#根据粘度
+
+    print("Re: {}, U: {}, tau: {}".format(Re, U0, tau))
+
+    init(U0, block, Rho0)
     max_iter = 500
     imgs=[]
     for n in range(max_iter):
         U_pre = np.copy(U)
-        f, Rho, U, UU = simulation.evolution(NY, NX, f, Rho, U, UU, tau, block ,G, Q ,e, ww, re)
+        f, Rho, U, UU = simulation.evolution(NY, NX, f, Rho, U, UU, tau, block ,Rho0, U0, G, Q ,e, ww, re)
         if(n % 5 == 0):#每5步输出一次结果
             print('Iter: {}, Error: {}'.format(n, simulation.error(U, U_pre)))
             output.writetecplot(NY, NX, Rho, U, n)
-            pic=output.draw_velocity_field(NY, NX, U, UU, Rho, n, save_fig=False)
-            imgs.append(pic)
+            #pic=output.draw_velocity_field(NY, NX, U, UU, Rho, n, save_fig=False)
+            #imgs.append(pic)
         if(simulation.error(U, U_pre) < 2e-5):#误差足够小，认为收敛
             print('Converged at Iter: {}, Error: {}'.format(n, simulation.error(U, U_pre)))
             output.writetecplot(NY, NX, Rho, U, n)
-            pic=output.draw_velocity_field(NY, NX, U, UU, Rho,n, save_fig=False)
-            imgs.append(pic)
+            #pic=output.draw_velocity_field(NY, NX, U, UU, Rho,n, save_fig=False)
+            #imgs.append(pic)
             break
     #将结果做成视频
-    output_video = 'lbm_simulation.mp4'
+    '''    output_video = 'lbm_simulation.mp4'
     height, width, layers = imgs[0].shape
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     video = cv2.VideoWriter(output_video, fourcc, 5, (width, height))
     for img in imgs:
         video.write(cv2.cvtColor(img, cv2.COLOR_RGBA2BGR))
-    video.release()
+    video.release()'''
     
 
     
