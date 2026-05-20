@@ -8,15 +8,21 @@ def clear_output():
         if filename.startswith('velocity_field_') and filename.endswith('.png'):
             os.remove(filename)
 
-def writetecplot(NX, NY, rho, U, n):
+def writetecplot(NX, NY, rho, T, U, n):
     filename = 'output_{:08d}.dat'.format(n)
     with open(filename, 'w') as f:
         f.write('TITLE = "LBM Simulation"\n')
-        f.write('VARIABLES = "X", "Y", "rho", "u", "v"\n')
+        f.write('VARIABLES = "X", "Y", "rho","T" ,"u", "v"\n')
         f.write('ZONE T="Zone {}", I={}, J={}, F=POINT\n'.format(n//1000, NX, NY))
         for j in range(NY):
             for i in range(NX):
-                f.write('{} {} {} {} {}\n'.format(i, j, rho[i][j], U[i][j][0], U[i][j][1]))
+                if(not rho[i][j]==rho[i][j]):
+                    print("nan in rho")
+                if(not T[i][j]==T[i][j]):
+                    print("nan in T")
+                if(not(U[i][j][0]==U[i][j][0]) or not(U[i][j][1]==U[i][j][1])):
+                    print("nan in U")
+                f.write('{} {} {} {} {} {}\n'.format(i, j, rho[i][j], T[i][j], U[i][j][0], U[i][j][1]))
 
 def draw_velocity_field(NY, NX, U, UU, Rho, n, save_fig=False):
     x = np.arange(0, NY, 1)

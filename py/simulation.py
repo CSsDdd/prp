@@ -10,15 +10,21 @@ wwD2Q9=np.array(wwD2Q9)
 QD2Q9=9#D2Q9模型的离散速度数量
 
 @numba.njit
-def feq(m, RHO, U, V,e=eD2Q9,ww=wwD2Q9,re=reD2Q9):#计算平衡态分布函数，参数表为 方向索引，密度，宏观速度（x轴），宏观速度（y轴）
-    eu = e[m][0] * U + e[m][1] * V
-    uv = U * U + V * V
+def U_feq(m, RHO, U,e=eD2Q9,ww=wwD2Q9,re=reD2Q9):#计算平衡态分布函数，参数表为 方向索引，密度，宏观速度（x轴），宏观速度（y轴）
+    eu = e[m][0] * U[0] + e[m][1] * U[1]
+    uv = U[0] * U[0] + U[1] * U[1]
     return ww[m] * RHO * (1.0 + 3.0 * eu + 4.5 * eu * eu - 1.5 * uv)#公式可见视频
+
+@numba.njit
+def T_feq(k,T,U,e=eD2Q9,ww=wwD2Q9,re=reD2Q9):#温度分布函数的平衡态计算公式，但是返回的是温度分布函数的平衡态值（温度）
+	eu=e[k][0]*U[0]+e[k][1]*U[1]
+	x=ww[k]*T*(1.0+3*eu)
+	return x
 
 
 #NX,NY为网格的行列数，Q为离散速度方向的数量，f为密度分布函数，f_col为碰撞后的密度分布函数，Rho为密度，U为速度，UU为速度的模长，U_pre为上一步的速度，tau为弛豫时间，G为外力
 @numba.njit
-def evolution(NX, NY, f,f_col, Rho, U, UU, tau, block, Rho0 , U0=[0,0] ,G=0, Q=QD2Q9 ,e=eD2Q9, ww=wwD2Q9, re=reD2Q9):
+def evolution(NX, NY, f,f_col, Rho, U, UU, U_tau,t,t_col,T,T_tau, block, Rho0 , U0=[0,0], T0=0.5, G=[0,0], Q=QD2Q9 ,e=eD2Q9, ww=wwD2Q9, re=reD2Q9):
     #求碰撞之后的密度分布函数
     for i in range(NX):
         for j in range(NY):
@@ -26,9 +32,12 @@ def evolution(NX, NY, f,f_col, Rho, U, UU, tau, block, Rho0 , U0=[0,0] ,G=0, Q=Q
                 continue
             for m in range(Q):
                 f_col[i][j][m] = (f[i][j][m] + 
-                                  (feq(m, Rho[i][j], U[i][j][0], U[i][j][1], e, ww, re) - f[i][j][m]) / tau + 
-                                  ww[m]*(1-1/(2*tau))*3*(e[m][0]*G[0]+e[m][1]*G[1]))#计算碰撞
-
+                                  (U_feq(m, Rho[i][j], U[i][j]) - f[i][j][m]) / U_tau + 
+                                  ww[m]*(1-1/(2*U_tau))*3*(e[m][0]*G[0]+e[m][1]*G[1])
+                                  )#计算速度碰撞
+                t_col[i][j][m] = (t[i][j][m] +
+                                  (T_feq(m,T[i][j],U[i][j])-t[i][j][m])/T_tau
+                                  )
     #密度函数量的迁移加边界条件
     for i in range(NX):
         for j in range(NY):
@@ -38,21 +47,30 @@ def evolution(NX, NY, f,f_col, Rho, U, UU, tau, block, Rho0 , U0=[0,0] ,G=0, Q=Q
                 ip = i - e[m][0]#计算i方向预期坐标
                 jp = j - e[m][1]#计算j方向预期坐标
                 if(ip<0):
-                    f[i][j][m] = f_col[1][j][m]
+                    f[i][j][m] = (U_feq(m, Rho0, U0)
+                                    + f_col[1][j][m] 
+                                    - U_feq(m, Rho[1][j], U[1][j]))
+                    t[i][j][m] = (T_feq(m, T0, U0)
+                                  + t_col[1][j][m]
+                                  - T_feq(m,T[1][j],U[1][j]))
                 elif(ip>=NX):
-                    f[i][j][m] = f_col[NX-1][j][m]
-                elif(jp < 0 or jp >= NY or block[ip][jp] == 1):#如果碰到边界或者墙壁
+                    f[i][j][m] = (U_feq(m, Rho[NX-1][j], U[NX-1][j])
+                                    + f_col[NX-2][j][m]
+                                    - U_feq(m, Rho[NX-2][j], U[NX-2][j]))
+                    t[i][j][m] = (T_feq(m, T[NX-1][j], U[NX-1][j])
+                                    + t_col[NX-2][j][m]
+                                    - T_feq(m, T[NX-2][j], U[NX-2][j]))
+                elif(jp < 0 or jp >= NY ):
+                    assert(0)#理论上这种情况不会发生了？我将上下壁面（需反弹的面）用block维护了
+                    f[i][j][m] = f_col[i][j][re[m]]
+                    t[i][j][m] = -t_col[i][j][re[m]]+2*ww[m]*T[ip][jp]
+                elif(block[ip][jp] == 1):#如果碰到边界或者墙壁
                     f[i][j][m] = f_col[i][j][re[m]]#如果碰到墙壁，碰撞后会反方向速度回到同一点
+                    t[i][j][m] = -t_col[i][j][re[m]]+2*ww[m]*T[ip][jp]
+                
                 else:
                     f[i][j][m] = f_col[ip][jp][m]#不碰撞就迁移
-    #处理入口处边界情况：用等于初速的平衡态分布函数来处理
-    for j in range(NY):
-        i = 0
-        if(block[i][j] == 1):
-            continue
-        for m in range(Q):
-            if(e[m][0]!=-1):#如果是向右的速度
-                f[i][j][m] = feq(m, Rho0, U0[0], U0[1], e, ww, re)#用平衡态分布函数来处理入口边界
+                    t[i][j][m] = t_col[ip][jp][m]
     #用迁移后的密度分布函数求宏观量
     for i in range(NX):
         for j in range(NY):
@@ -61,17 +79,19 @@ def evolution(NX, NY, f,f_col, Rho, U, UU, tau, block, Rho0 , U0=[0,0] ,G=0, Q=Q
             Rho[i][j] = 0.#准备叠加
             U[i][j][0] =0.#准备叠加
             U[i][j][1] =0.
+            T[i][j]=0.
             for m in range(Q):
                 Rho[i][j] += f[i][j][m]
                 U[i][j][0] += f[i][j][m] * e[m][0]
                 U[i][j][1] += f[i][j][m] * e[m][1]
+                T[i][j]+=t[i][j][m]
             if(Rho[i][j] > 0):
                 U[i][j][0] /= Rho[i][j]#取加权
                 U[i][j][1] /= Rho[i][j]#取加权
                 UU[i][j] = math.sqrt(U[i][j][0] * U[i][j][0] + U[i][j][1] * U[i][j][1])#算标量
            #else:
             #    U[i][j] = [0.,0.]
-    return f, Rho, U, UU
+    return f, Rho, U, UU, T
 
 def error(U, U_pre):
     U = np.array(U)
