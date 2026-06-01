@@ -64,7 +64,7 @@ if __name__ == "__main__":
         for j in range(40, 160):#这里填写Y轴就好了
             block[i][j] = 1#这里交换了顺序'''
     #block=graph.generate_random_img(size=(NX,NY))
-    block=graph.read_image(r"D:\coding\projects\prp\2.png")#读取图片（这里我是手画的）
+    block=graph.read_image(r"D:\coding\projects\prp\random_img.png")#读取图片（这里我是手画的）
     block=graph.clip_image(block,NX,NY)#这是转换成指定大小
     block=block/255#转换成掩码（（（
     
