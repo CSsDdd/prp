@@ -29,15 +29,21 @@ def evolution(NX, NY, f,f_col, Rho, U, UU, U_tau,t,t_col,T,T_tau, block, Rho0 , 
     for i in range(NX):
         for j in range(NY):
             if(block[i][j] == 1):#如果是墙壁格子，不进行操作
-                continue
-            for m in range(Q):
-                f_col[i][j][m] = (f[i][j][m] + 
-                                  (U_feq(m, Rho[i][j], U[i][j]) - f[i][j][m]) / U_tau + 
-                                  ww[m]*(1-1/(2*U_tau))*3*(e[m][0]*G[0]+e[m][1]*G[1])
-                                  )#计算速度碰撞
-                t_col[i][j][m] = (t[i][j][m] +
-                                  (T_feq(m,T[i][j],U[i][j])-t[i][j][m])/T_tau
-                                  )
+                for m in range(Q):
+                    t_col[i][j][m] = (t[i][j][m] +
+                                    (T_feq(m,T[i][j],[0,0])-t[i][j][m])/T_tau
+                                    )
+                    f_col[i][j][m] = f[i][j][m] 
+            else:
+                for m in range(Q):
+                    f_col[i][j][m] = (f[i][j][m] + 
+                                    (U_feq(m, Rho[i][j], U[i][j]) - f[i][j][m]) / U_tau + 
+                                    ww[m]*(1-1/(2*U_tau))*3*(e[m][0]*G[0]+e[m][1]*G[1])#注：浮力项不需要考虑，因为我们考虑的是水平截面，竖直方向的不用统计。这里的G是梯度力……
+                                    )#计算速度碰撞
+                    
+                    t_col[i][j][m] = (t[i][j][m] +
+                                    (T_feq(m,T[i][j],U[i][j])-t[i][j][m])/T_tau
+                                    )
     #密度函数量的迁移加边界条件
     for i in range(NX):
         for j in range(NY):
@@ -67,7 +73,6 @@ def evolution(NX, NY, f,f_col, Rho, U, UU, U_tau,t,t_col,T,T_tau, block, Rho0 , 
                 elif(block[ip][jp] == 1):#如果碰到边界或者墙壁
                     f[i][j][m] = f_col[i][j][re[m]]#如果碰到墙壁，碰撞后会反方向速度回到同一点
                     t[i][j][m] = -t_col[i][j][re[m]]+2*ww[m]*T[ip][jp]
-                
                 else:
                     f[i][j][m] = f_col[ip][jp][m]#不碰撞就迁移
                     t[i][j][m] = t_col[ip][jp][m]

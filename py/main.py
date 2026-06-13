@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import cv2
 
-NX = 600#格子 x 轴 数目（格点数）
+NX = 200*3#格子 x 轴 数目（格点数）#记得乘以3保证是3的整数倍！
 NY = 200#格子 y 轴 数目 （格点数）
 Q = 9  # D2Q9 有九个方向
 Rho0 = 1.0 # 密度
@@ -58,14 +58,16 @@ def init(U0,block,Rho0):
 #定义一个墙壁的格子，1代表墙壁，0代表流体
 if __name__ == "__main__":
     output.clear_output()#清理之前的输出文件
-    block = np.zeros((NX, NY), dtype = np.int32)
+    block = np.zeros((NX//3, NY), dtype = np.int32)
     #在中间放一个障碍物
     '''for i in range(80, 160):#这里填写X轴就好了
         for j in range(40, 160):#这里填写Y轴就好了
             block[i][j] = 1#这里交换了顺序'''
     #block=graph.generate_random_img(size=(NX,NY))
-    block=graph.read_image(r"D:\coding\projects\prp\random_img.png")#读取图片（这里我是手画的）
-    block=graph.clip_image(block,NX,NY)#这是转换成指定大小
+    block=graph.read_image(r"D:\coding\projects\prp\cell_random_img.jpg")#读取图片（这里我是手画的）
+    block=graph.clip_image(block,NX//3,NY)#这是转换成指定大小
+    block=np.concatenate([np.zeros((NX//3,NY),dtype = block.dtype),block,np.zeros((NX//3,NY),dtype = block.dtype)],axis=0)
+    print(block.shape)
     block=block/255#转换成掩码（（（
     
     Re = float(input("enter Re"))#输入雷诺数
