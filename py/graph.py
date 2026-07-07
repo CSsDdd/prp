@@ -51,7 +51,7 @@ def perlin_noise(size,grid_size=(10,10),seed=42):#生成柏林噪声
     return res
 
 #这里chance 是各个图形的概率 ，里面每个数组（其实改成tuple会更可读），分别是概率，和对应的形状 ， graph_size是图形半径相对grid大小，size_float是半径大小的波动范围
-def cell_noise(size,grid_size=(40,40),seed=42,chance=[[0.2,"circle"],[0.2,"square"],[0.2,"diamond"]],graph_size=0.4/2,size_float=0.1,save_path="cell_random_img.jpg"):
+def cell_noise(size,grid_size=(40,40),seed=42,chance=[[0.3,"circle"],[0.3,"square"],[0.2,"diamond"]],graph_size=0.4/2,size_float=0.1,save_path="cell_random_img.jpg"):
     #np.random.seed(seed)
     map=np.ones(shape=size)
     x_cnt=size[0]//grid_size[0]
@@ -75,17 +75,19 @@ def cell_noise(size,grid_size=(40,40),seed=42,chance=[[0.2,"circle"],[0.2,"squar
             sz_index=np.random.uniform(1.-size_float,1.+size_float)
             szx=int(gszx*sz_index)
             szy=int(gszy*sz_index)
+            
+            check=None#check判断是否需要着色。可以以此为入手点，进行进一步丰富多种形状！tpe参数描述形状，这里可以加一些其他的比如方形（我这里写的是圆形）
+            if(tpe=="circle"):
+                check=lambda dx,dy: True if np.sqrt(dx**2+dy**2)<=min(szx,szy) else False#
+            elif(tpe=="square"):
+                check=lambda dx,dy: True
+            elif(tpe=="diamond"):
+                check=lambda dx,dy: True if (abs(dx)+abs(dy))<=min(szx,szy) else False
+            elif(tpe=="null"):
+                check=lambda dx,dy: False
+
             for dx in range(0,szx+1):#考虑到取余问题，多动一位，毕竟是有进一步的距离判断的，问题不大
                 for dy in range(0,szy+1):
-                    check=None#check判断是否需要着色。可以以此为入手点，进行进一步丰富多种形状！tpe参数描述形状，这里可以加一些其他的比如方形（我这里写的是圆形）
-                    if(tpe=="circle"):
-                        check=lambda dx,dy: True if np.sqrt(dx**2+dy**2)<=min(szx,szy) else False#
-                    elif(tpe=="square"):
-                        check=lambda dx,dy: True
-                    elif(tpe=="diamond"):
-                        check=lambda dx,dy: True if (abs(dx)+abs(dy))<=min(szx,szy) else False
-                    elif(tpe=="null"):
-                        check=lambda dx,dy: False
                     if check(dx,dy):
                         map[posx+dx][posy+dy]=0
                     if check(-dx,dy):
