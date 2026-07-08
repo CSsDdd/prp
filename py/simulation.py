@@ -62,8 +62,8 @@ class controller:
                     self.T[i][j]= self.T0
                 #以平衡态分布函数作为初始的密度分布函数
                 for m in range(Q):
-                    self.f[i][j][m] =U_feq(m, self.Rho[i][j], self.U[i][j])#按平衡态分布
-                    self.g[i][j][m] =T_feq(m, self.T[i][j], self.U[i][j])
+                    self.f[i][j][m] =f_eq(m, self.Rho[i][j], self.U[i][j])#按平衡态分布
+                    self.g[i][j][m] =g_eq(m, self.T[i][j], self.U[i][j])
             self.U[i][0] = np.zeros(shape=(2))#无速度
             self.T[i][0]=self.Tc
             self.U[i][NY-1] = np.zeros(shape=(2))#无速度
@@ -92,15 +92,15 @@ class col_status(IntEnum):
     Block_Solid=4
 
 @numba.njit
-def U_feq(m, RHO, U,e=eD2Q9,ww=wwD2Q9,re=reD2Q9):#计算平衡态分布函数，参数表为 方向索引，密度，宏观速度（x轴），宏观速度（y轴）
+def f_eq(m, RHO, U,e=eD2Q9,ww=wwD2Q9,re=reD2Q9):#计算平衡态分布函数，参数表为 方向索引，密度，宏观速度（x轴），宏观速度（y轴）
     eu = e[m][0] * U[0] + e[m][1] * U[1]
     uv = U[0] * U[0] + U[1] * U[1]
     return ww[m] * RHO * (1.0 + 3.0 * eu + 4.5 * eu * eu - 1.5 * uv)#公式可见视频
 
 @numba.njit
-def T_feq(k,T,U,e=eD2Q9,ww=wwD2Q9,re=reD2Q9):#温度分布函数的平衡态计算公式，但是返回的是温度分布函数的平衡态值（温度）
-	eu=e[k][0]*U[0]+e[k][1]*U[1]
-	x=ww[k]*T*(1.0+3*eu)
+def g_eq(m,T,U,e=eD2Q9,ww=wwD2Q9,re=reD2Q9):#温度分布函数的平衡态计算公式，但是返回的是温度分布函数的平衡态值（温度）
+	eu=e[m][0]*U[0]+e[m][1]*U[1]
+	x=ww[m]*T*(1.0+3*eu)
 	return x
 
 #NX,NY为网格的行列数，Q为离散速度方向的数量，f为密度分布函数，f_col为碰撞后的密度分布函数，Rho为密度，U为速度，UU为速度的模长，U_pre为上一步的速度，tau为弛豫时间，G为外力,Cs为固体比热容，Cl为流体比热容（均为单位质量）
@@ -122,17 +122,17 @@ def evolution(NX, NY,
             if(block[i][j] == 1):#如果是墙壁格子，不进行操作
                 for m in range(Q):
                     g_col[i][j][m] = (g[i][j][m] +
-                                    (T_feq(m,T[i][j],[0,0])-g[i][j][m])/T_tau
+                                    (g_eq(m,T[i][j],[0,0])-g[i][j][m])/T_tau
                                     )#计算热量碰撞
                     f_col[i][j][m] = f[i][j][m]#密度不动
             else:
                 for m in range(Q):
                     g_col[i][j][m] = (g[i][j][m] +
-                                    (T_feq(m,T[i][j],U[i][j])-g[i][j][m])/T_tau
+                                    (g_eq(m,T[i][j],U[i][j])-g[i][j][m])/T_tau
                                     )#计算热量碰撞
                     
                     f_col[i][j][m] = (f[i][j][m] + 
-                                    (U_feq(m, Rho[i][j], U[i][j]) - f[i][j][m]) / U_tau + 
+                                    (f_eq(m, Rho[i][j], U[i][j]) - f[i][j][m]) / U_tau + 
                                     ww[m]*(1-1/(2*U_tau))*3*(e[m][0]*G[0]+e[m][1]*G[1])#注：浮力项不需要考虑，因为我们考虑的是水平截面，竖直方向的不用统计。这里的G是梯度力……
                                     )#计算速度碰撞
                     
@@ -147,9 +147,15 @@ def evolution(NX, NY,
                     jp = j - e[m][1]#计算j方向预期坐标
                     if(ip<0 or ip>=NX):
                         col_stat[i][j]=col_status.Open_Boundary
+                        f[i][j][m]=f_col[i][j][m]
+
+                        g_neq=g_col[i][j][m]-g_eq(m,T[i][j],U[i][j])#同样存在不连续风险。
+                        g[i][j][m]=g_eq(m,T0,U[i][j])+g_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
                         continue
                     elif(jp < 0 or jp >= NY):
                         col_stat[i][j]=col_status.Bouncy_Boundary
+                        f[i][j]=f_col[i][j][m]
+                        g[i][j][m]=g_col[i][j][re[m]]
                         continue
                     elif(block[ip][jp] == 0):#如果是来自流体的
                         col_stat[i][j]=col_status.Block_Solid
@@ -165,21 +171,30 @@ def evolution(NX, NY,
                     jp = j - e[m][1]#计算j方向预期坐标
                     if(ip<0 or ip>=NX):
                         col_stat[i][j]=col_status.Open_Boundary
+                        f_neq=f_col[i][j][m]-f_eq(m,Rho[i][j],U[i][j])#密度会不匹配吗？
+                        f[i][j][m]=f_eq(m,Rho0,U[i][j])+f_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
+
+                        g_neq=g_col[i][j][m]-g_eq(m,T[i][j],U[i][j])#同样存在不连续风险。
+                        g[i][j][m]=g_eq(m,T0,U[i][j])+g_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
+                        continue#写switchcase习惯了
                     elif(jp < 0 or jp >= NY ):
                         col_stat[i][j]=col_status.Bouncy_Boundary
+                        f[i][j][m]=f_col[i][j][re[m]]
+                        g[i][j][m]=g_col[i][j][re[m]]
+                        continue
                     elif(block[ip][jp] == 1):#如果碰到边界或者墙壁
                         col_stat[i][j]=col_status.Block_Liquid
                         f[i][j][m] = f_col[i][j][re[m]]
                         g[i][j][m] = g_col[ip][jp][m]
+                        continue
                     else:
                         f[i][j][m] = f_col[ip][jp][m]#不碰撞就迁移
                         g[i][j][m] = g_col[ip][jp][m]
+                        continue
         
     #用迁移后的密度分布函数求宏观量
     for i in range(NX):
         for j in range(NY):
-            if(block[i][j] == 1):#如果是墙壁格子，不进行操作
-                continue
             Rho[i][j] = 0.#准备叠加
             U[i][j][0] =0.#准备叠加
             U[i][j][1] =0.
@@ -193,8 +208,10 @@ def evolution(NX, NY,
                 U[i][j][0] /= Rho[i][j]#取加权
                 U[i][j][1] /= Rho[i][j]#取加权
                 UU[i][j] = math.sqrt(U[i][j][0] * U[i][j][0] + U[i][j][1] * U[i][j][1])#算标量
-           #else:
-            #    U[i][j] = [0.,0.]
+            if block[i][j] == 1:
+                U[i][j][0] = 0.0
+                U[i][j][1] = 0.0
+                UU[i][j] = 0.0
     return f, Rho, U, UU, T
 
 def error(U, U_pre):
