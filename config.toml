@@ -1,0 +1,24 @@
+[Lattice]
+Nx = 200
+Ny = 200
+U0x = 0.05
+U0y = 0.00
+
+[Physics]
+X=0.1
+
+Re = 10.0
+Pr = 7.01
+beta = 0.00021
+Ra = 1000.0
+
+C_l = 4182
+kappa_l = 0.6
+Rho_l = 998.0
+
+C_s = 385
+kappa_s = 401.0
+Rho_s = 8960.0
+
+Ux = 0.01
+Uy = 0

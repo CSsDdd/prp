@@ -12,23 +12,28 @@ wwD2Q9=np.array(wwD2Q9)
 QD2Q9=9#D2Q9模型的离散速度数量
 
 class controller:
-    def __init__(self,NX,NY,
-                 block,kappa,C,
-                 Re,Pr,beta,Ra,U0,
-                 g,D=2,Q=9,G=np.zeros(shape=(2))):
+    def __init__(self,NX,NY,U0,
+                 block,Chi,
+                 X,U,Re,Pr,beta,Ra,
+                 D=2,Q=9,G=np.zeros(shape=(2))):
         self.block=block
-        self.kappa=kappa
-        self.C=C
+        self.Chi=Chi
 
         self.re = np.array([0,3,4,1,2,7,8,5,6])#相反方向索引
         self.ww = np.array([4.0/9, 1.0/9, 1.0/9, 1.0/9, 1.0/9, 1.0/36, 1.0/36, 1.0/36, 1.0/36,])# 各个方向的权重（）
 
         self.NX=NX
         self.NY=NY
+
+        self.deltax=X/NX
+        self.deltat=self.deltax*(U0[0]/U[0])
+
+        self.Chi = self.Chi * (self.deltat / (self.deltax ** 2))#修正
+
         viu = np.sqrt(np.sum(U0*U0))*NY/Re#根据雷诺数计算粘度
         self.U_tau = 3*viu + 0.5#根据运动粘度算出速度松弛系数
         self.T_tau = 3*viu/Pr + 0.5 #根据运动粘度和普朗克数算出温度松弛系数
-        self.delta_T = Ra*(viu**2)/((NY**3)*g*beta*Pr)#根据普朗克数算出deltaT（开尔文，关联到归一化后的T的1.0）
+        self.delta_T = Ra*(viu**2)/((NY**3)*9.8*beta*Pr)#根据普朗克数算出deltaT（开尔文，关联到归一化后的T的1.0）
 
         self.Rho = np.ones((NX, NY,), dtype = np.float64)# 每个格点的总密度
         self.U = np.ones((NX, NY, D), dtype = np.float64) # 速度矢量
@@ -55,7 +60,7 @@ class controller:
                 if(block[i][j] == 1):#如果是墙壁格子，密度为0，速度为0
                     self.Rho[i][j] = 1.0#调整尺度
                     self.U[i][j] = np.zeros(shape=(2))#无速度
-                    self.T[i][j]=self.T0
+                    self.T[i][j]=1
                 else:
                     self.Rho[i][j] = self.Rho0
                     self.U[i][j] = self.U0
@@ -64,17 +69,17 @@ class controller:
                 for m in range(Q):
                     self.f[i][j][m] =f_eq(m, self.Rho[i][j], self.U[i][j])#按平衡态分布
                     self.g[i][j][m] =g_eq(m, self.T[i][j], self.U[i][j])
-            self.U[i][0] = np.zeros(shape=(2))#无速度
-            self.T[i][0]=self.Tc
-            self.U[i][NY-1] = np.zeros(shape=(2))#无速度
-            self.T[i][NY-1]=self.Tc
+            #self.U[i][0] = np.zeros(shape=(2))#无速度
+            #self.T[i][0]=self.Tc
+            #self.U[i][NY-1] = np.zeros(shape=(2))#无速度
+            #self.T[i][NY-1]=self.Tc
 
     def run_one_step(self):
         self.f, self.Rho, self.U, self.UU, self.T = evolution(NX=self.NX, NY=self.NY, 
                                                 f=self.f,f_col=self.f_col,Rho=self.Rho,
                                                 U=self.U,UU=self.UU,U_tau=self.U_tau,
                                                 g=self.g, g_col=self.g_col, T=self.T,
-                                                block= self.block, kappa=self.kappa, C=self.C,
+                                                block= self.block, Chi=self.Chi,
                                                 Rho0=self.Rho0,U0=self.U0,T0=self.T0,G=self.G,
                                                 col_stat=self.col_stat)
         
@@ -111,14 +116,15 @@ def evolution(NX, NY,
               U, UU, U_tau,
               g, g_col, 
               T,
-              block, kappa, C,
+              block, Chi,
               col_stat, 
               Rho0, U0=[0,0], T0=0.5, Cs=1, Cl=1, G=[0,0], Q=QD2Q9 ,e=eD2Q9, ww=wwD2Q9, re=reD2Q9):
     #step1:求碰撞之后的密度分布函数
     for i in range(NX):
         for j in range(NY):
-            alpha=kappa[i][j]/(Rho[i][j]*C[i][j])
+            alpha=Chi[i][j]*1/Rho[i][j]
             T_tau=0.5+3*alpha#实际上τ=0.5+3*α*Δt/（Δx）²
+
             if(block[i][j] == 1):#如果是墙壁格子，不进行操作
                 for m in range(Q):
                     g_col[i][j][m] = (g[i][j][m] +
@@ -140,25 +146,25 @@ def evolution(NX, NY,
     #step2各个量第一轮迁移。同时完成迁移情况分类
     for i in range(NX):
         for j in range(NY):
-            col_stat[i][j]=col_status.Finished#默认改为0
+            col_stat[i][j]=col_status.Finished.value#默认改为0
             if(block[i][j] == 1):#如果是墙壁格子，不进行操作
                 for m in range(Q):
                     ip = i - e[m][0]#计算i方向预期坐标
                     jp = j - e[m][1]#计算j方向预期坐标
                     if(ip<0 or ip>=NX):
-                        col_stat[i][j]=col_status.Open_Boundary
+                        col_stat[i][j]=col_status.Open_Boundary.value
                         f[i][j][m]=f_col[i][j][m]
 
-                        g_neq=g_col[i][j][m]-g_eq(m,T[i][j],U[i][j])#同样存在不连续风险。
-                        g[i][j][m]=g_eq(m,T0,U[i][j])+g_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
+                        g_neq=g_col[i+e[m][0]][j+e[m][1]][m]-g_eq(m,T[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#同样存在不连续风险。
+                        g[i][j][m]=g_eq(m,T0,U0)+g_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
                         continue
                     elif(jp < 0 or jp >= NY):
-                        col_stat[i][j]=col_status.Bouncy_Boundary
-                        f[i][j]=f_col[i][j][m]
+                        col_stat[i][j]=col_status.Bouncy_Boundary.value
+                        f[i][j][m]=f_col[i][j][m]
                         g[i][j][m]=g_col[i][j][re[m]]
                         continue
                     elif(block[ip][jp] == 0):#如果是来自流体的
-                        col_stat[i][j]=col_status.Block_Solid
+                        col_stat[i][j]=col_status.Block_Solid.value
                         f[i][j][m] = f_col[i][j][m]
                         g[i][j][m] = g_col[ip][jp][m]
                         continue
@@ -170,20 +176,20 @@ def evolution(NX, NY,
                     ip = i - e[m][0]#计算i方向预期坐标
                     jp = j - e[m][1]#计算j方向预期坐标
                     if(ip<0 or ip>=NX):
-                        col_stat[i][j]=col_status.Open_Boundary
-                        f_neq=f_col[i][j][m]-f_eq(m,Rho[i][j],U[i][j])#密度会不匹配吗？
-                        f[i][j][m]=f_eq(m,Rho0,U[i][j])+f_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
+                        col_stat[i][j]=col_status.Open_Boundary.value
+                        f_neq=f_col[i+e[m][0]][j+e[m][1]][m]-f_eq(m,Rho[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#密度会不匹配吗？
+                        f[i][j][m]=f_eq(m,Rho0,U0)+f_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
 
-                        g_neq=g_col[i][j][m]-g_eq(m,T[i][j],U[i][j])#同样存在不连续风险。
-                        g[i][j][m]=g_eq(m,T0,U[i][j])+g_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
+                        g_neq=g_col[i+e[m][0]][j+e[m][1]][m]-g_eq(m,T[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#同样存在不连续风险。
+                        g[i][j][m]=g_eq(m,T0,U0)+g_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
                         continue#写switchcase习惯了
                     elif(jp < 0 or jp >= NY ):
-                        col_stat[i][j]=col_status.Bouncy_Boundary
+                        col_stat[i][j]=col_status.Bouncy_Boundary.value
                         f[i][j][m]=f_col[i][j][re[m]]
                         g[i][j][m]=g_col[i][j][re[m]]
                         continue
                     elif(block[ip][jp] == 1):#如果碰到边界或者墙壁
-                        col_stat[i][j]=col_status.Block_Liquid
+                        col_stat[i][j]=col_status.Block_Liquid.value
                         f[i][j][m] = f_col[i][j][re[m]]
                         g[i][j][m] = g_col[ip][jp][m]
                         continue
