@@ -1,0 +1,5 @@
+- 热传导系数k推导
+$
+\Delta T_p^{'}=\frac{\Delta T_p  \kappa_p \Delta x^2}{ \Delta x\rho_p C_p \Delta x^3}\\
+k=\frac{\kappa_p }{\rho_p C_p \Delta x^2}\\
+k=\frac{1}{\rho_l}\frac{\kappa_p}{\rho_{物质特性}C_p\Delta x^2}\\ \chi_p=\frac{\kappa_p }{\rho_{物质特性}C_p}\\ \chi_p=\chi_l\frac{\Delta x^2}{\Delta t} \\ k=\frac{1}{\rho_l}\frac{\chi_p}{\Delta x^2}\\k=\frac{1}{\rho_l}\frac{\chi_l}{\Delta t}

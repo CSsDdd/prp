@@ -1,8 +1,11 @@
 import math
 import numpy as np
 import numba
+import pathlib
+import tomllib
 from enum import IntEnum 
 import output
+import graph
 eD2Q9=[[0,0],[1,0],[0,1],[-1,0],[0,-1],[1,1],[-1,1],[-1,-1],[1,-1]]#D2Q9模型的离散速度
 eD2Q9=np.array(eD2Q9)
 reD2Q9=[0,3,4,1,2,7,8,5,6]#D2Q9模型的反向索引
@@ -12,70 +15,115 @@ wwD2Q9=np.array(wwD2Q9)
 QD2Q9=9#D2Q9模型的离散速度数量
 
 class controller:
-    def __init__(self,NX,NY,U0,
-                 block,Chi,
-                 X,U,Re,Pr,beta,Ra,
+    def __init__(self,config_path,image_path,
                  D=2,Q=9,G=np.zeros(shape=(2))):
-        self.block=block
-        self.Chi=Chi
+        # 读取物理量和格子配置
+        config_path = pathlib.Path(config_path)
+        with config_path.open("rb") as f:
+            config = tomllib.load(f)
+        #两类，格子参数
+        lattice = config["Lattice"]#格子参数
+        physics = config["Physics"]#物理参数
 
+        #格子基本信息：
+        self.Nx, self.Ny = lattice["Nx"], lattice["Ny"]
+        self.U0 = np.array([lattice["U0x"], lattice["U0y"]])
+        
+        #物理基本信息
+        self.Up = np.array([physics["Ux"], physics["Uy"]])#物理流速
+        self.Th = physics["Th"]
+        self.Tc = physics["Tc"]
+
+        # 物性相关
+        # 计算固体和流体的热扩散率
+        self.Chi_s = physics["kappa_s"]/(physics["Rho_s"]*physics["C_s"])
+        self.Chi_l = physics["kappa_l"]/(physics["Rho_l"]*physics["C_l"])
+        self.Nu_l = physics["Nu_l"]#参考Tc时数值，运动粘度
+        self.beta = physics["beta"]
+
+        # 读取图像并构造三段式通道掩码
+        self.block = graph.read_image(str(image_path))
+        self.block = graph.clip_image(self.block, self.Nx, self.Ny)
+        self.block = np.round(self.block)
+        empty = np.zeros((self.Nx, self.Ny), dtype=self.block.dtype)
+        self.block = np.concatenate([empty, self.block, empty], axis=0)/255
+        self.Chi = self.block*(self.Chi_s-self.Chi_l) + self.Chi_l
+        # 三段式通道对应的格子数和物理长度
+        self.Nx, self.Ny = self.Nx*3, self.Ny
+        self.X = physics["X"]*3
+
+        
+        self.delta_T = self.Th-self.Tc
+
+        #构建物理量到格子量过渡工具
+        self.deltax=self.X/self.Nx
+        self.deltat=self.deltax*(self.U0[0]/self.Up[0])
+
+        #格子量
         self.re = np.array([0,3,4,1,2,7,8,5,6])#相反方向索引
         self.ww = np.array([4.0/9, 1.0/9, 1.0/9, 1.0/9, 1.0/9, 1.0/36, 1.0/36, 1.0/36, 1.0/36,])# 各个方向的权重（）
 
-        self.NX=NX
-        self.NY=NY
+        self.block = np.round(self.block)
+        
 
-        self.deltax=X/NX
-        self.deltat=self.deltax*(U0[0]/U[0])
-
-        self.Chi = self.Chi * (self.deltat / (self.deltax ** 2))#修正
-
-        viu = np.sqrt(np.sum(U0*U0))*NY/Re#根据雷诺数计算粘度
-        self.U_tau = 3*viu + 0.5#根据运动粘度算出速度松弛系数
-        self.T_tau = 3*viu/Pr + 0.5 #根据运动粘度和普朗克数算出温度松弛系数
-        self.delta_T = Ra*(viu**2)/((NY**3)*9.8*beta*Pr)#根据普朗克数算出deltaT（开尔文，关联到归一化后的T的1.0）
-
-        self.Rho = np.ones((NX, NY,), dtype = np.float64)# 每个格点的总密度
-        self.U = np.ones((NX, NY, D), dtype = np.float64) # 速度矢量
-        self.UU = np.ones((NX, NY,), dtype = np.float64) #速度标量值
-        self.U_pre = np.ones((NX, NY, D), dtype = np.float64)#定义一个前一步的速度量来计算相邻两步之间的误差
-        self.f = np.zeros((NX, NY, Q), dtype = np.float64)#速度分布函数
+        self.Rho = np.ones((self.Nx, self.Ny,), dtype = np.float64)# 每个格点的总密度
+        self.U = np.ones((self.Nx, self.Ny, D), dtype = np.float64) # 速度矢量
+        self.UU = np.ones((self.Nx, self.Ny,), dtype = np.float64) #速度标量值
+        self.U_pre = np.ones((self.Nx, self.Ny, D), dtype = np.float64)#定义一个前一步的速度量来计算相邻两步之间的误差
+        self.f = np.zeros((self.Nx, self.Ny, Q), dtype = np.float64)#速度分布函数
         self.f_col=np.zeros(shape=self.f.shape)#碰撞使用的临时速度分布变量
 
-        self.T = np.ones((NX,NY),dtype=np.float64)#每个格点的总热量（归一化后）
-        self.g = np.zeros((NX, NY, Q), dtype = np.float64)#温度分布函数
+        self.T = np.ones((self.Nx,self.Ny),dtype=np.float64)#每个格点的总热量（归一化后）
+        self.g = np.zeros((self.Nx, self.Ny, Q), dtype = np.float64)#温度分布函数
         self.g_col=np.zeros(shape=self.g.shape)#碰撞使用的临时温度分布变量
 
         self.col_stat=np.zeros(shape=self.g.shape)
 
-        self.U0=U0
         self.Rho0=1
-        self.Th=1#热的
-        self.T0=0.5#默认水温
-        self.Tc=0#冷的
+        self.T0=0.0#取入口水温为低温
         self.G=G
 
-        for i in range(NX):
-            for j in range(NY):
-                if(block[i][j] == 1):#如果是墙壁格子，密度为0，速度为0
+        #物性量纲调整
+
+        self.Chi = self.Chi * (self.deltat / (self.deltax ** 2))#修正
+        self.Nu_l=self.Nu_l / (self.deltax**2/self.deltat)#算出格子运动粘度
+        self.beta = self.beta*self.delta_T
+        self.Chi_l = self.Chi_l * (self.deltat / (self.deltax ** 2))
+        self.Chi_s = self.Chi_s * (self.deltat / (self.deltax ** 2))
+        #
+        self.U_tau=3*self.Nu_l+0.5#算出U_tau暂不考虑温度引起的运动粘度变化，待修正
+        
+        #打印指标，用于参考
+        self.Re=np.sqrt(np.sum(self.U0**2))*self.Nx/self.Nu_l
+        self.Pr=self.Nu_l/self.Chi_l
+        self.Ra=((9.8*(self.deltat**2/self.deltax)
+                 *self.beta
+                 *1
+                 *(self.Nx**3))/(
+                 self.Chi_l
+                 *self.Nu_l
+                ))
+        print("Re:",self.Re)
+        print("Pr:",self.Pr)
+        print("Ra:",self.Ra)
+
+        for i in range(self.Nx):
+            for j in range(self.Ny):
+                if(self.block[i][j] == 1):#如果是墙壁格子，密度为0，速度为0
                     self.Rho[i][j] = 1.0#调整尺度
                     self.U[i][j] = np.zeros(shape=(2))#无速度
-                    self.T[i][j]=1
+                    self.T[i][j]=0.0
                 else:
                     self.Rho[i][j] = self.Rho0
                     self.U[i][j] = self.U0
-                    self.T[i][j]= self.T0
+                    self.T[i][j]= 0.0
                 #以平衡态分布函数作为初始的密度分布函数
                 for m in range(Q):
                     self.f[i][j][m] =f_eq(m, self.Rho[i][j], self.U[i][j])#按平衡态分布
                     self.g[i][j][m] =g_eq(m, self.T[i][j], self.U[i][j])
-            #self.U[i][0] = np.zeros(shape=(2))#无速度
-            #self.T[i][0]=self.Tc
-            #self.U[i][NY-1] = np.zeros(shape=(2))#无速度
-            #self.T[i][NY-1]=self.Tc
 
     def run_one_step(self):
-        self.f, self.Rho, self.U, self.UU, self.T = evolution(NX=self.NX, NY=self.NY, 
+        self.f, self.Rho, self.U, self.UU, self.T = evolution(NX=self.Nx, NY=self.Ny, 
                                                 f=self.f,f_col=self.f_col,Rho=self.Rho,
                                                 U=self.U,UU=self.UU,U_tau=self.U_tau,
                                                 g=self.g, g_col=self.g_col, T=self.T,
@@ -87,7 +135,7 @@ class controller:
         return error(self.U,self.U_pre)
 
     def write(self,n):
-        output.writetecplot(self.NX, self.NY, self.Rho, self.T, self.U, n)
+        output.writetecplot(self.Nx, self.Ny, self.Rho, self.T, self.U, n)
 
 class col_status(IntEnum):
     Finished=0
@@ -116,20 +164,27 @@ def evolution(NX, NY,
               U, UU, U_tau,
               g, g_col, 
               T,
-              block, Chi,
-              col_stat, 
+              block, source, Chi,
+              col_stat,
               Rho0, U0=[0,0], T0=0.5, Cs=1, Cl=1, G=[0,0], Q=QD2Q9 ,e=eD2Q9, ww=wwD2Q9, re=reD2Q9):
     #step1:求碰撞之后的密度分布函数
     for i in range(NX):
         for j in range(NY):
             alpha=Chi[i][j]*1/Rho[i][j]
-            T_tau=0.5+3*alpha#实际上τ=0.5+3*α*Δt/（Δx）²
-
+            T_tau=0.5+3*alpha#实际上τ=0.5+3*α*Δt/（Δx）
             if(block[i][j] == 1):#如果是墙壁格子，不进行操作
+                #更新传热
+                #需注意，认为高温热源温度为1
+                if(source[i][j]):
+                    delta_T=(1-T[i][j])*(1-np.exp(-alpha))
+                else:
+                    delta_T=0
+                #正常更新
                 for m in range(Q):
                     g_col[i][j][m] = (g[i][j][m] +
                                     (g_eq(m,T[i][j],[0,0])-g[i][j][m])/T_tau
-                                    )#计算热量碰撞
+                                    )+ww[m]*delta_T
+                    #计算热量碰撞
                     f_col[i][j][m] = f[i][j][m]#密度不动
             else:
                 for m in range(Q):
@@ -175,7 +230,7 @@ def evolution(NX, NY,
                 for m in range(Q):
                     ip = i - e[m][0]#计算i方向预期坐标
                     jp = j - e[m][1]#计算j方向预期坐标
-                    if(ip<0 or ip>=NX):
+                    if(ip<0):
                         col_stat[i][j]=col_status.Open_Boundary.value
                         f_neq=f_col[i+e[m][0]][j+e[m][1]][m]-f_eq(m,Rho[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#密度会不匹配吗？
                         f[i][j][m]=f_eq(m,Rho0,U0)+f_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
@@ -183,6 +238,14 @@ def evolution(NX, NY,
                         g_neq=g_col[i+e[m][0]][j+e[m][1]][m]-g_eq(m,T[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#同样存在不连续风险。
                         g[i][j][m]=g_eq(m,T0,U0)+g_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
                         continue#写switchcase习惯了
+                    if(ip>=NX):
+                        col_stat[i][j]=col_status.Open_Boundary.value
+                        f_neq=f_col[i+e[m][0]][j+e[m][1]][m]-f_eq(m,Rho[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#密度会不匹配吗？
+                        f[i][j][m]=f_eq(m,Rho[i][j],U[i][j])+f_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
+
+                        g_neq=g_col[i+e[m][0]][j+e[m][1]][m]-g_eq(m,T[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#同样存在不连续风险。
+                        g[i][j][m]=g_eq(m,Rho[i][j],U[i][j])+g_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
+                        continue#写switchcase习惯了                        
                     elif(jp < 0 or jp >= NY ):
                         col_stat[i][j]=col_status.Bouncy_Boundary.value
                         f[i][j][m]=f_col[i][j][re[m]]
@@ -226,3 +289,4 @@ def error(U, U_pre):
     error1 = np.sum((U - U_pre) ** 2)
     error2 = np.sum(U_pre ** 2)
     return error1 / (error2 + 1e-8)
+

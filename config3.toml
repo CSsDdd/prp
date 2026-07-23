@@ -17,9 +17,9 @@ C_l = 4182
 kappa_l = 0.6
 Rho_l = 998.0
 
-C_s = 385
-kappa_s = 401.0
-Rho_s = 8960.0
+C_s = 1470
+kappa_s = 0.19
+Rho_s = 1190.0
 
 Ux = 0.01
 Uy = 0
