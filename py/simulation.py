@@ -33,7 +33,7 @@ class controller:
         self.Up = np.array([physics["Ux"], physics["Uy"]])#物理流速
         self.Th = physics["Th"]
         self.Tc = physics["Tc"]
-
+        self.P_total = physics["P"]
         # 物性相关
         # 计算固体和流体的热扩散率
         self.Chi_s = physics["kappa_s"]/(physics["Rho_s"]*physics["C_s"])
@@ -47,7 +47,10 @@ class controller:
         self.block = np.round(self.block)
         empty = np.zeros((self.Nx, self.Ny), dtype=self.block.dtype)
         self.block = np.concatenate([empty, self.block, empty], axis=0)/255
-        self.Chi = self.block*(self.Chi_s-self.Chi_l) + self.Chi_l
+        self.Chi = np.array(self.block, dtype=np.float64, copy=True)*(self.Chi_s-self.Chi_l) + self.Chi_l
+        self.source_delta_T=np.array(self.block, dtype=np.float64, copy=True)
+        self.source_delta_T=self.source_delta_T/np.sum(self.source_delta_T)*self.P_total/(physics["Rho_s"]*physics["C_s"])
+
         # 三段式通道对应的格子数和物理长度
         self.Nx, self.Ny = self.Nx*3, self.Ny
         self.X = physics["X"]*3
@@ -83,9 +86,15 @@ class controller:
         self.T0=0.0#取入口水温为低温
         self.G=G
 
+        # 热稳态误差的历史状态
+        self._thermal_T_pre = None
+        self._outlet_heat_pre = None
+        self._thermal_stable_checks = 0
+
         #物性量纲调整
 
         self.Chi = self.Chi * (self.deltat / (self.deltax ** 2))#修正
+        self.source_delta_T = self.source_delta_T*self.deltat/(self.deltax**3 * self.delta_T)
         self.Nu_l=self.Nu_l / (self.deltax**2/self.deltat)#算出格子运动粘度
         self.beta = self.beta*self.delta_T
         self.Chi_l = self.Chi_l * (self.deltat / (self.deltax ** 2))
@@ -123,16 +132,55 @@ class controller:
                     self.g[i][j][m] =g_eq(m, self.T[i][j], self.U[i][j])
 
     def run_one_step(self):
+        self.U_pre=self.UU
         self.f, self.Rho, self.U, self.UU, self.T = evolution(NX=self.Nx, NY=self.Ny, 
                                                 f=self.f,f_col=self.f_col,Rho=self.Rho,
                                                 U=self.U,UU=self.UU,U_tau=self.U_tau,
                                                 g=self.g, g_col=self.g_col, T=self.T,
-                                                block= self.block, Chi=self.Chi,
+                                                block= self.block, Chi=self.Chi, source_delta_T=self.source_delta_T,
                                                 Rho0=self.Rho0,U0=self.U0,T0=self.T0,G=self.G,
                                                 col_stat=self.col_stat)
         
-    def report_err(self):
+    def report_velocity_err(self):
         return error(self.U,self.U_pre)
+
+    def _outlet_heat_proxy(self):
+        # 只统计出口处朝向域外的流体对流带热
+        outlet_fluid = 1.0-self.block[-1, :]
+        outlet_velocity = np.maximum(self.U[-1, :, 0], 0.0)
+        return np.sum(outlet_velocity*self.T[-1, :]*outlet_fluid)
+
+    def report_thermal_err(self, field_tol=1e-6, peak_tol=1e-6,
+                           outlet_tol=1e-4, required_checks=3):
+        # 采集当前温度场、热源峰值和出口带热量
+        source_mask = self.source_delta_T > 0.0
+        if not np.any(source_mask):
+            raise ValueError("热源图中没有有效发热点")
+        source_peak = np.max(self.T[source_mask])
+        outlet_heat = self._outlet_heat_proxy()
+
+        # 首次调用只建立比较基准
+        if self._thermal_T_pre is None:
+            self._thermal_T_pre = self.T.copy()
+            self._outlet_heat_pre = outlet_heat
+            return thermal_error_result(np.inf, np.inf, np.inf, False, 0)
+
+        # 分别计算场变化、热点变化和出口热流变化
+        temperature_change = self.T-self._thermal_T_pre
+        field_error = np.sqrt(np.mean(temperature_change**2))
+        peak_pre = np.max(self._thermal_T_pre[source_mask])
+        peak_error = abs(source_peak-peak_pre)
+        heat_scale = max(abs(outlet_heat), abs(self._outlet_heat_pre), 1e-12)
+        outlet_error = abs(outlet_heat-self._outlet_heat_pre)/heat_scale
+
+        # 要求三个指标连续多次同时达标
+        stable = field_error < field_tol and peak_error < peak_tol and outlet_error < outlet_tol
+        self._thermal_stable_checks = self._thermal_stable_checks+1 if stable else 0
+        converged = self._thermal_stable_checks >= required_checks
+        self._thermal_T_pre = self.T.copy()
+        self._outlet_heat_pre = outlet_heat
+        return thermal_error_result(field_error, peak_error, outlet_error,
+                                    converged, self._thermal_stable_checks)
 
     def write(self,n):
         output.writetecplot(self.Nx, self.Ny, self.Rho, self.T, self.U, n)
@@ -164,7 +212,7 @@ def evolution(NX, NY,
               U, UU, U_tau,
               g, g_col, 
               T,
-              block, source, Chi,
+              block, source_delta_T, Chi,
               col_stat,
               Rho0, U0=[0,0], T0=0.5, Cs=1, Cl=1, G=[0,0], Q=QD2Q9 ,e=eD2Q9, ww=wwD2Q9, re=reD2Q9):
     #step1:求碰撞之后的密度分布函数
@@ -173,17 +221,12 @@ def evolution(NX, NY,
             alpha=Chi[i][j]*1/Rho[i][j]
             T_tau=0.5+3*alpha#实际上τ=0.5+3*α*Δt/（Δx）
             if(block[i][j] == 1):#如果是墙壁格子，不进行操作
-                #更新传热
-                #需注意，认为高温热源温度为1
-                if(source[i][j]):
-                    delta_T=(1-T[i][j])*(1-np.exp(-alpha))
-                else:
-                    delta_T=0
+                
                 #正常更新
                 for m in range(Q):
                     g_col[i][j][m] = (g[i][j][m] +
                                     (g_eq(m,T[i][j],[0,0])-g[i][j][m])/T_tau
-                                    )+ww[m]*delta_T
+                                    )+ww[m]*source_delta_T[i][j]*Rho[i][j]#虽然这里Rho[i][j]是多余的，但是处于规范还是加了
                     #计算热量碰撞
                     f_col[i][j][m] = f[i][j][m]#密度不动
             else:
@@ -233,18 +276,18 @@ def evolution(NX, NY,
                     if(ip<0):
                         col_stat[i][j]=col_status.Open_Boundary.value
                         f_neq=f_col[i+e[m][0]][j+e[m][1]][m]-f_eq(m,Rho[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#密度会不匹配吗？
-                        f[i][j][m]=f_eq(m,Rho0,U0)+f_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
+                        f[i][j][m]=f_eq(m,Rho0,U0)+f_neq
 
                         g_neq=g_col[i+e[m][0]][j+e[m][1]][m]-g_eq(m,T[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#同样存在不连续风险。
-                        g[i][j][m]=g_eq(m,T0,U0)+g_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
+                        g[i][j][m]=g_eq(m,T0,U0)+g_neq
                         continue#写switchcase习惯了
                     if(ip>=NX):
                         col_stat[i][j]=col_status.Open_Boundary.value
                         f_neq=f_col[i+e[m][0]][j+e[m][1]][m]-f_eq(m,Rho[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#密度会不匹配吗？
-                        f[i][j][m]=f_eq(m,Rho[i][j],U[i][j])+f_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
+                        f[i][j][m]=f_eq(m,Rho[i][j],U[i][j])+f_neq
 
                         g_neq=g_col[i+e[m][0]][j+e[m][1]][m]-g_eq(m,T[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#同样存在不连续风险。
-                        g[i][j][m]=g_eq(m,Rho[i][j],U[i][j])+g_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
+                        g[i][j][m]=g_eq(m,Rho[i][j],U[i][j])+g_neq
                         continue#写switchcase习惯了                        
                     elif(jp < 0 or jp >= NY ):
                         col_stat[i][j]=col_status.Bouncy_Boundary.value
@@ -289,4 +332,15 @@ def error(U, U_pre):
     error1 = np.sum((U - U_pre) ** 2)
     error2 = np.sum(U_pre ** 2)
     return error1 / (error2 + 1e-8)
+
+# 统一热稳态误差的返回格式，便于主程序记录
+def thermal_error_result(field_error, peak_error, outlet_error,
+                         converged, stable_checks):
+    return {
+        "field_rms_error": field_error,
+        "source_peak_error": peak_error,
+        "outlet_heat_error": outlet_error,
+        "converged": converged,
+        "stable_checks": stable_checks,
+    }
 
