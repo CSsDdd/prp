@@ -1,0 +1,30 @@
+# 2026-07-25 observed NaN baseline.
+# Historical observation: Rho and U first became non-finite near step 3409.
+# Keep this file unchanged for reproducing and diagnosing the unstable case.
+
+[Lattice]
+Nx = 200
+Ny = 200
+U0x = 0.1
+U0y = 0.00
+
+[Physics]
+X = 0.02
+
+beta = 0.00021
+Nu_l = 0.00000179
+
+Tc = 273.15
+Th = 333.15
+P = 0.05
+
+C_l = 4182
+kappa_l = 0.6
+Rho_l = 998.0
+
+C_s = 385
+kappa_s = 401.0
+Rho_s = 8960.0
+
+Ux = 0.1
+Uy = 0

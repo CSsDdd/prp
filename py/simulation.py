@@ -242,67 +242,65 @@ def evolution(NX, NY,
                     
                     
     #step2各个量第一轮迁移。同时完成迁移情况分类
+    wall_U=np.array([0.0,0.0])
     for i in range(NX):
         for j in range(NY):
             col_stat[i][j]=col_status.Finished.value#默认改为0
-            if(block[i][j] == 1):#如果是墙壁格子，不进行操作
-                for m in range(Q):
-                    ip = i - e[m][0]#计算i方向预期坐标
-                    jp = j - e[m][1]#计算j方向预期坐标
-                    if(ip<0 or ip>=NX):
-                        col_stat[i][j]=col_status.Open_Boundary.value
-                        f[i][j][m]=f_col[i][j][m]
 
-                        g_neq=g_col[i+e[m][0]][j+e[m][1]][m]-g_eq(m,T[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#同样存在不连续风险。
-                        g[i][j][m]=g_eq(m,T0,U0)+g_neq#这里外面的速度U修正，用里面的估计，稍微提高一点连续性
-                        continue
-                    elif(jp < 0 or jp >= NY):
+            # 平面开放边界：同一法向内部节点提供全部非平衡分布
+            if((i == 0 or i == NX-1) and j > 0 and j < NY-1):
+                col_stat[i][j]=col_status.Open_Boundary.value
+                ref_i = 1 if i == 0 else NX-2
+                ref_Rho = Rho[ref_i][j]
+                ref_U = U[ref_i][j]
+                ref_T = T[ref_i][j]
+
+                if(block[i][j] == 1):#固体密度不动，只重构温度分布
+                    target_T = T0 if i == 0 else ref_T
+                    for m in range(Q):
+                        f[i][j][m]=f_col[i][j][m]
+                        g_neq=g_col[ref_i][j][m]-g_eq(m,ref_T,ref_U)
+                        g[i][j][m]=g_eq(m,target_T,wall_U)+g_neq
+                else:#流体入口给定速度，出口给定密度
+                    target_Rho = ref_Rho if i == 0 else Rho0
+                    target_U = U0 if i == 0 else ref_U
+                    target_T = T0 if i == 0 else ref_T
+                    for m in range(Q):
+                        f_neq=f_col[ref_i][j][m]-f_eq(m,ref_Rho,ref_U)
+                        f[i][j][m]=f_eq(m,target_Rho,target_U)+f_neq
+                        g_neq=g_col[ref_i][j][m]-g_eq(m,ref_T,ref_U)
+                        g[i][j][m]=g_eq(m,target_T,target_U)+g_neq
+                continue
+
+            for m in range(Q):
+                # pull-streaming 来源坐标
+                src_i = i - e[m][0]
+                src_j = j - e[m][1]
+
+                if(block[i][j] == 1):#固体格子
+                    if(src_i < 0 or src_i >= NX or src_j < 0 or src_j >= NY):
                         col_stat[i][j]=col_status.Bouncy_Boundary.value
                         f[i][j][m]=f_col[i][j][m]
                         g[i][j][m]=g_col[i][j][re[m]]
-                        continue
-                    elif(block[ip][jp] == 0):#如果是来自流体的
+                    elif(block[src_i][src_j] == 0):#如果是来自流体的
                         col_stat[i][j]=col_status.Block_Solid.value
-                        f[i][j][m] = f_col[i][j][m]
-                        g[i][j][m] = g_col[ip][jp][m]
-                        continue
+                        f[i][j][m]=f_col[i][j][m]
+                        g[i][j][m]=g_col[src_i][src_j][m]
                     else:
-                        f[i][j][m] = f_col[i][j][m]#固体密度不动（默认没速度）
-                        g[i][j][m] = g_col[ip][jp][m]
-            else:
-                for m in range(Q):
-                    ip = i - e[m][0]#计算i方向预期坐标
-                    jp = j - e[m][1]#计算j方向预期坐标
-                    if(ip<0):
-                        col_stat[i][j]=col_status.Open_Boundary.value
-                        f_neq=f_col[i+e[m][0]][j+e[m][1]][m]-f_eq(m,Rho[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#密度会不匹配吗？
-                        f[i][j][m]=f_eq(m,Rho0,U0)+f_neq
-
-                        g_neq=g_col[i+e[m][0]][j+e[m][1]][m]-g_eq(m,T[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#同样存在不连续风险。
-                        g[i][j][m]=g_eq(m,T0,U0)+g_neq
-                        continue#写switchcase习惯了
-                    if(ip>=NX):
-                        col_stat[i][j]=col_status.Open_Boundary.value
-                        f_neq=f_col[i+e[m][0]][j+e[m][1]][m]-f_eq(m,Rho[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#密度会不匹配吗？
-                        f[i][j][m]=f_eq(m,Rho[i][j],U[i][j])+f_neq
-
-                        g_neq=g_col[i+e[m][0]][j+e[m][1]][m]-g_eq(m,T[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#同样存在不连续风险。
-                        g[i][j][m]=g_eq(m,T[i][j],U[i][j])+g_neq
-                        continue#写switchcase习惯了                        
-                    elif(jp < 0 or jp >= NY ):
+                        f[i][j][m]=f_col[i][j][m]#固体密度不动（默认没速度）
+                        g[i][j][m]=g_col[src_i][src_j][m]
+                else:#流体格子
+                    if(src_i < 0 or src_i >= NX or src_j < 0 or src_j >= NY):
                         col_stat[i][j]=col_status.Bouncy_Boundary.value
                         f[i][j][m]=f_col[i][j][re[m]]
                         g[i][j][m]=g_col[i][j][re[m]]
-                        continue
-                    elif(block[ip][jp] == 1):#如果碰到边界或者墙壁
+                    elif(block[src_i][src_j] == 1):#如果碰到边界或者墙壁
                         col_stat[i][j]=col_status.Block_Liquid.value
-                        f[i][j][m] = f_col[i][j][re[m]]
-                        g[i][j][m] = g_col[ip][jp][m]
-                        continue
+                        f[i][j][m]=f_col[i][j][re[m]]
+                        g[i][j][m]=g_col[src_i][src_j][m]
                     else:
-                        f[i][j][m] = f_col[ip][jp][m]#不碰撞就迁移
-                        g[i][j][m] = g_col[ip][jp][m]
-                        continue
+                        f[i][j][m]=f_col[src_i][src_j][m]#不碰撞就迁移
+                        g[i][j][m]=g_col[src_i][src_j][m]
         
     #用迁移后的密度分布函数求宏观量
     for i in range(NX):
