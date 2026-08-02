@@ -45,16 +45,16 @@ class controller:
         self.block = graph.read_image(str(image_path))
         self.block = graph.clip_image(self.block, self.Nx, self.Ny)
         self.block = np.round(self.block)
-        empty = np.zeros((self.Nx, self.Ny), dtype=self.block.dtype)
+        empty = np.zeros((round(self.Nx*0.25), self.Ny), dtype=self.block.dtype)
         self.block = np.concatenate([empty, self.block, empty], axis=0)/255
         self.Chi = np.array(self.block, dtype=np.float64, copy=True)*(self.Chi_s-self.Chi_l) + self.Chi_l
         self.source_delta_T=np.array(self.block, dtype=np.float64, copy=True)
         self.source_delta_T=self.source_delta_T/np.sum(self.source_delta_T)*self.P_total/(physics["Rho_s"]*physics["C_s"])
 
         # 三段式通道对应的格子数和物理长度
-        self.Nx, self.Ny = self.Nx*3, self.Ny
-        self.X = physics["X"]*3
-
+        self.Nx, self.Ny = self.block.shape[0], self.Ny
+        #print(self.Nx,self.Ny)
+        self.X = physics["X"]*1.5
         
         self.delta_T = self.Th-self.Tc
 
@@ -287,7 +287,7 @@ def evolution(NX, NY,
                         f[i][j][m]=f_eq(m,Rho[i][j],U[i][j])+f_neq
 
                         g_neq=g_col[i+e[m][0]][j+e[m][1]][m]-g_eq(m,T[i+e[m][0]][j+e[m][1]],U[i+e[m][0]][j+e[m][1]])#同样存在不连续风险。
-                        g[i][j][m]=g_eq(m,Rho[i][j],U[i][j])+g_neq
+                        g[i][j][m]=g_eq(m,T[i][j],U[i][j])+g_neq
                         continue#写switchcase习惯了                        
                     elif(jp < 0 or jp >= NY ):
                         col_stat[i][j]=col_status.Bouncy_Boundary.value
