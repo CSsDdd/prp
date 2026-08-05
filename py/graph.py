@@ -51,7 +51,7 @@ def perlin_noise(size,grid_size=(10,10),seed=42):#生成柏林噪声
     return res
 
 #这里chance 是各个图形的概率 ，里面每个数组（其实改成tuple会更可读），分别是概率，和对应的形状 ， graph_size是图形半径相对grid大小，size_float是半径大小的波动范围
-def cell_noise(size,grid_size=(40,40),seed=42,chance=[[0.3,"circle"],[0.3,"square"],[0.2,"diamond"]],graph_size=0.4/2,size_float=0.1,save_path="cell_random_img.jpg"):
+def cell_noise(size,grid_size=(40,40),seed=42,chance=[[0.3,"circle"],[0.3,"square"],[0.2,"diamond"]],graph_size=0.4/2,size_float=0.1,save_path="cell_random_img.jpg",padding=0.4):
     #np.random.seed(seed)
     map=np.ones(shape=size)
     x_cnt=size[0]//grid_size[0]
@@ -61,8 +61,10 @@ def cell_noise(size,grid_size=(40,40),seed=42,chance=[[0.3,"circle"],[0.3,"squar
     print(gszx,gszy)
     for i in range(1,x_cnt-1):#边缘不取
         for j in range(1,y_cnt-1):#边缘不取特征点
-            posx=i*grid_size[0]+int(np.random.uniform(0,grid_size[0]))
-            posy=j*grid_size[1]+int(np.random.uniform(0,grid_size[1]))
+            pad_x=round(grid_size[0]*padding)
+            pad_y=round(grid_size[1]*padding)
+            posx=i*grid_size[0]+pad_x+int(np.random.uniform(0,grid_size[0]-pad_x))
+            posy=j*grid_size[1]+pad_y+int(np.random.uniform(0,grid_size[1]-pad_y))
             #print(posx,posy)#随机特征点位置
             op=np.random.uniform(0.,1.)
             tpe="null"
@@ -134,3 +136,4 @@ def gri_sin_perlin(max_X_power=3,max_Y_power=3,size=(400,400),save_path='random_
 
 #gri_sin_perlin(max_X_power=3,max_Y_power=3)
 #help(noise)
+cell_noise

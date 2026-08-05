@@ -36,10 +36,13 @@ class controller:
         self.P_total = physics["P"]
         # 物性相关
         # 计算固体和流体的热扩散率
+        self.Rho_s=physics["Rho_s"]
+        self.Rho_l=physics["Rho_l"]
         self.Chi_s = physics["kappa_s"]/(physics["Rho_s"]*physics["C_s"])
         self.Chi_l = physics["kappa_l"]/(physics["Rho_l"]*physics["C_l"])
         self.Nu_l = physics["Nu_l"]#参考Tc时数值，运动粘度
         self.beta = physics["beta"]
+
 
         # 读取图像并构造三段式通道掩码
         self.block = graph.read_image(str(image_path))
@@ -86,11 +89,6 @@ class controller:
         self.T0=0.0#取入口水温为低温
         self.G=G
 
-        # 热稳态误差的历史状态
-        self._thermal_T_pre = None
-        self._outlet_heat_pre = None
-        self._thermal_stable_checks = 0
-
         #物性量纲调整
 
         self.Chi = self.Chi * (self.deltat / (self.deltax ** 2))#修正
@@ -101,7 +99,12 @@ class controller:
         self.Chi_s = self.Chi_s * (self.deltat / (self.deltax ** 2))
         #
         self.U_tau=3*self.Nu_l+0.5#算出U_tau暂不考虑温度引起的运动粘度变化，待修正
-        
+
+        # 可靠性判据的历史状态
+        self.U_pre=None
+        self.T_pre=None
+        self._reliability_stable_checks = 0
+
         #打印指标，用于参考
         self.Re=np.sqrt(np.sum(self.U0**2))*self.Nx/self.Nu_l
         self.Pr=self.Nu_l/self.Chi_l
@@ -132,7 +135,8 @@ class controller:
                     self.g[i][j][m] =g_eq(m, self.T[i][j], self.U[i][j])
 
     def run_one_step(self):
-        self.U_pre=self.UU
+        self.U_pre=self.U.copy()
+        self.T_pre=self.T.copy()
         self.f, self.Rho, self.U, self.UU, self.T = evolution(NX=self.Nx, NY=self.Ny, 
                                                 f=self.f,f_col=self.f_col,Rho=self.Rho,
                                                 U=self.U,UU=self.UU,U_tau=self.U_tau,
@@ -140,47 +144,82 @@ class controller:
                                                 block= self.block, Chi=self.Chi, source_delta_T=self.source_delta_T,
                                                 Rho0=self.Rho0,U0=self.U0,T0=self.T0,G=self.G,
                                                 col_stat=self.col_stat)
-        
-    def report_velocity_err(self):
-        return error(self.U,self.U_pre)
 
-    def _outlet_heat_proxy(self):
-        # 只统计出口处朝向域外的流体对流带热
-        outlet_fluid = 1.0-self.block[-1, :]
-        outlet_velocity = np.maximum(self.U[-1, :, 0], 0.0)
-        return np.sum(outlet_velocity*self.T[-1, :]*outlet_fluid)
-
-    def report_thermal_err(self, field_tol=1e-6, peak_tol=1e-6,
-                           outlet_tol=1e-4, required_checks=3):
-        # 采集当前温度场、热源峰值和出口带热量
+    def report_reliability(self, velocity_tol=1e-6, temperature_tol=1e-6,peak_tol=1e-6,
+                           required_checks=3):
+        # 采集当前速度场、温度场和出口带热量
         source_mask = self.source_delta_T > 0.0
         if not np.any(source_mask):
             raise ValueError("热源图中没有有效发热点")
         source_peak = np.max(self.T[source_mask])
-        outlet_heat = self._outlet_heat_proxy()
-
+        
         # 首次调用只建立比较基准
-        if self._thermal_T_pre is None:
-            self._thermal_T_pre = self.T.copy()
-            self._outlet_heat_pre = outlet_heat
-            return thermal_error_result(np.inf, np.inf, np.inf, False, 0)
+        first_check = self.T_pre is None
+        if first_check:
+            velocity_error = np.inf
+            velocity_error_per = np.inf
 
-        # 分别计算场变化、热点变化和出口热流变化
-        temperature_change = self.T-self._thermal_T_pre
-        field_error = np.sqrt(np.mean(temperature_change**2))
-        peak_pre = np.max(self._thermal_T_pre[source_mask])
-        peak_error = abs(source_peak-peak_pre)
-        heat_scale = max(abs(outlet_heat), abs(self._outlet_heat_pre), 1e-12)
-        outlet_error = abs(outlet_heat-self._outlet_heat_pre)/heat_scale
+            temperature_error = np.inf
+            temperature_error_per = np.inf
+            
+            peak_error = np.inf
+            peak_error_per = np.inf
 
-        # 要求三个指标连续多次同时达标
-        stable = field_error < field_tol and peak_error < peak_tol and outlet_error < outlet_tol
-        self._thermal_stable_checks = self._thermal_stable_checks+1 if stable else 0
-        converged = self._thermal_stable_checks >= required_checks
-        self._thermal_T_pre = self.T.copy()
-        self._outlet_heat_pre = outlet_heat
-        return thermal_error_result(field_error, peak_error, outlet_error,
-                                    converged, self._thermal_stable_checks)
+        if not first_check:
+            #1.计算流场收敛程度
+            velocity_error = np.sqrt(np.mean((self.U_pre-self.U)**2))
+            velocity_error_per=velocity_error/max(1e-12,np.abs(np.sqrt(np.mean(self.U**2))),np.abs(np.sqrt(np.mean(self.U_pre**2))))
+            #2.计算温度场收敛程度
+            temperature_error = np.sqrt(np.mean((self.T_pre-self.T)**2))
+            temperature_error_per=temperature_error/max(1e-12,np.abs(np.sqrt(np.mean(self.T**2))),np.abs(np.sqrt(np.mean(self.T_pre**2))))
+            #3.最高温度收敛程度
+            peak_error = abs(source_peak-np.max(self.T_pre[source_mask]))
+            peak_error_per = peak_error/max(1e-12,np.max(self.T[source_mask]),np.max(self.T_pre[source_mask]))
+
+        # 要求速度和三个热稳态指标连续多次同时达标
+        stable = (velocity_error_per < velocity_tol and temperature_error_per < temperature_tol and
+                  peak_error_per < peak_tol )
+        
+        self._reliability_stable_checks = (
+            self._reliability_stable_checks+1 if stable else 0
+        )
+        converged = self._reliability_stable_checks >= required_checks
+        return {
+            "converged": bool(converged),
+            "stable_checks": int(self._reliability_stable_checks),
+            "velocity_field_relative_change": float(velocity_error_per),
+            "temperature_field_relative_change": float(temperature_error_per),
+            "source_peak_temperature_relative_change": float(peak_error_per),
+        }
+
+    def report_performance(self):
+        #统计最高温
+        source_mask = self.source_delta_T > 0.0
+        heat_Peak_l=np.max(self.T[source_mask])
+        heat_Peak_h=self.Tc+heat_Peak_l*(self.Th-self.Tc)
+
+        #统计入口处压差
+        avg_Income_Rho=np.mean(self.Rho[0][1:-1:1])
+        P_l=1/3*(avg_Income_Rho-1)#末尾参考为1
+        P_p=P_l*self.Rho_l*(self.deltax**2)/(self.deltat**2)
+
+        #统计入口体积流量
+        V_l=np.sum(self.U[0, 1:-1, 0])
+        V_p=V_l*(self.deltax**3)/(self.deltat)
+
+        return {
+            "max_source_temperature_k": float(heat_Peak_h),
+            "pressure_drop_pa": float(P_p),
+            "volume_flow_rate_m3_s": float(V_p),
+        }
+
+    def final_report(self, reliability):
+        report = {
+            "performance": self.report_performance(),
+            "reliability": self.report_reliability(),
+        }
+        #print(report)
+        return report
 
     def write(self,n):
         output.writetecplot(self.Nx, self.Ny, self.Rho, self.T, self.U, n)
@@ -242,65 +281,87 @@ def evolution(NX, NY,
                     
                     
     #step2各个量第一轮迁移。同时完成迁移情况分类
-    wall_U=np.array([0.0,0.0])
     for i in range(NX):
         for j in range(NY):
             col_stat[i][j]=col_status.Finished.value#默认改为0
+            is_open_section = j > 0 and j < NY-1
 
-            # 平面开放边界：同一法向内部节点提供全部非平衡分布
-            if((i == 0 or i == NX-1) and j > 0 and j < NY-1):
+            # 1. 入口格点：给定速度和温度，全方向重构
+            if(i == 0 and is_open_section):
                 col_stat[i][j]=col_status.Open_Boundary.value
-                ref_i = 1 if i == 0 else NX-2
+                ref_i = 1
                 ref_Rho = Rho[ref_i][j]
                 ref_U = U[ref_i][j]
                 ref_T = T[ref_i][j]
-
                 if(block[i][j] == 1):#固体密度不动，只重构温度分布
-                    target_T = T0 if i == 0 else ref_T
                     for m in range(Q):
                         f[i][j][m]=f_col[i][j][m]
                         g_neq=g_col[ref_i][j][m]-g_eq(m,ref_T,ref_U)
-                        g[i][j][m]=g_eq(m,target_T,wall_U)+g_neq
-                else:#流体入口给定速度，出口给定密度
-                    target_Rho = ref_Rho if i == 0 else Rho0
-                    target_U = U0 if i == 0 else ref_U
-                    target_T = T0 if i == 0 else ref_T
+                        g[i][j][m]=g_eq(m,T0,np.array([0.0,0.0]))+g_neq
+                else:
                     for m in range(Q):
                         f_neq=f_col[ref_i][j][m]-f_eq(m,ref_Rho,ref_U)
-                        f[i][j][m]=f_eq(m,target_Rho,target_U)+f_neq
+                        f[i][j][m]=f_eq(m,ref_Rho,U0)+f_neq
                         g_neq=g_col[ref_i][j][m]-g_eq(m,ref_T,ref_U)
-                        g[i][j][m]=g_eq(m,target_T,target_U)+g_neq
+                        g[i][j][m]=g_eq(m,T0,U0)+g_neq
                 continue
 
+            # 2. 出口格点：给定密度，速度和温度沿用内部参考值
+            if(i == NX-1 and is_open_section):
+                col_stat[i][j]=col_status.Open_Boundary.value
+                ref_i = NX-2
+                ref_Rho = Rho[ref_i][j]
+                ref_U = U[ref_i][j]
+                ref_T = T[ref_i][j]
+                if(block[i][j] == 1):#固体密度不动，只重构温度分布
+                    for m in range(Q):
+                        f[i][j][m]=f_col[i][j][m]
+                        g_neq=g_col[ref_i][j][m]-g_eq(m,ref_T,ref_U)
+                        g[i][j][m]=g_eq(m,ref_T,np.array([0.0,0.0]))+g_neq
+                else:
+                    for m in range(Q):
+                        f_neq=f_col[ref_i][j][m]-f_eq(m,ref_Rho,ref_U)
+                        f[i][j][m]=f_eq(m,Rho0,ref_U)+f_neq
+                        g_neq=g_col[ref_i][j][m]-g_eq(m,ref_T,ref_U)
+                        g[i][j][m]=g_eq(m,ref_T,ref_U)+g_neq
+                continue
+
+            current_is_solid = block[i][j] == 1
             for m in range(Q):
                 # pull-streaming 来源坐标
                 src_i = i - e[m][0]
                 src_j = j - e[m][1]
+                source_is_outside = (src_i < 0 or src_i >= NX or
+                                     src_j < 0 or src_j >= NY)
 
-                if(block[i][j] == 1):#固体格子
-                    if(src_i < 0 or src_i >= NX or src_j < 0 or src_j >= NY):
-                        col_stat[i][j]=col_status.Bouncy_Boundary.value
+                # 3. 该方向碰到上下绝热边界，或位于四个角点
+                if(source_is_outside):
+                    col_stat[i][j]=col_status.Bouncy_Boundary.value
+                    if(current_is_solid):
                         f[i][j][m]=f_col[i][j][m]
-                        g[i][j][m]=g_col[i][j][re[m]]
-                    elif(block[src_i][src_j] == 0):#如果是来自流体的
+                    else:
+                        f[i][j][m]=f_col[i][j][re[m]]
+                    g[i][j][m]=g_col[i][j][re[m]]
+                    continue
+
+                # 4a. 当前格点是固体：密度不动，温度分布正常传递
+                if(current_is_solid):
+                    if(block[src_i][src_j] == 0):
                         col_stat[i][j]=col_status.Block_Solid.value
-                        f[i][j][m]=f_col[i][j][m]
-                        g[i][j][m]=g_col[src_i][src_j][m]
-                    else:
-                        f[i][j][m]=f_col[i][j][m]#固体密度不动（默认没速度）
-                        g[i][j][m]=g_col[src_i][src_j][m]
-                else:#流体格子
-                    if(src_i < 0 or src_i >= NX or src_j < 0 or src_j >= NY):
-                        col_stat[i][j]=col_status.Bouncy_Boundary.value
-                        f[i][j][m]=f_col[i][j][re[m]]
-                        g[i][j][m]=g_col[i][j][re[m]]
-                    elif(block[src_i][src_j] == 1):#如果碰到边界或者墙壁
-                        col_stat[i][j]=col_status.Block_Liquid.value
-                        f[i][j][m]=f_col[i][j][re[m]]
-                        g[i][j][m]=g_col[src_i][src_j][m]
-                    else:
-                        f[i][j][m]=f_col[src_i][src_j][m]#不碰撞就迁移
-                        g[i][j][m]=g_col[src_i][src_j][m]
+                    f[i][j][m]=f_col[i][j][m]
+                    g[i][j][m]=g_col[src_i][src_j][m]
+                    continue
+
+                # 4b. 流体从固体方向拉取：动量反弹，热量跨界传递
+                if(block[src_i][src_j] == 1):
+                    col_stat[i][j]=col_status.Block_Liquid.value
+                    f[i][j][m]=f_col[i][j][re[m]]
+                    g[i][j][m]=g_col[src_i][src_j][m]
+                    continue
+
+                # 5. 正常迁移
+                f[i][j][m]=f_col[src_i][src_j][m]
+                g[i][j][m]=g_col[src_i][src_j][m]
         
     #用迁移后的密度分布函数求宏观量
     for i in range(NX):
@@ -324,21 +385,9 @@ def evolution(NX, NY,
                 UU[i][j] = 0.0
     return f, Rho, U, UU, T
 
-def error(U, U_pre):
+def error(U, U_pre):#未使用
     U = np.array(U)
     U_pre = np.array(U_pre)
     error1 = np.sum((U - U_pre) ** 2)
     error2 = np.sum(U_pre ** 2)
     return error1 / (error2 + 1e-8)
-
-# 统一热稳态误差的返回格式，便于主程序记录
-def thermal_error_result(field_error, peak_error, outlet_error,
-                         converged, stable_checks):
-    return {
-        "field_rms_error": field_error,
-        "source_peak_error": peak_error,
-        "outlet_heat_error": outlet_error,
-        "converged": converged,
-        "stable_checks": stable_checks,
-    }
-
