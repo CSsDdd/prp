@@ -150,8 +150,9 @@ class controller:
         # 采集当前速度场、温度场和出口带热量
         source_mask = self.source_delta_T > 0.0
         if not np.any(source_mask):
-            raise ValueError("热源图中没有有效发热点")
-        source_peak = np.max(self.T[source_mask])
+            source_peak = 0
+        else:
+            source_peak = np.max(self.T[source_mask])
         
         # 首次调用只建立比较基准
         first_check = self.T_pre is None
@@ -173,8 +174,12 @@ class controller:
             temperature_error = np.sqrt(np.mean((self.T_pre-self.T)**2))
             temperature_error_per=temperature_error/max(1e-12,np.abs(np.sqrt(np.mean(self.T**2))),np.abs(np.sqrt(np.mean(self.T_pre**2))))
             #3.最高温度收敛程度
-            peak_error = abs(source_peak-np.max(self.T_pre[source_mask]))
-            peak_error_per = peak_error/max(1e-12,np.max(self.T[source_mask]),np.max(self.T_pre[source_mask]))
+            if not np.any(source_mask):
+                peak_error = 0
+                peak_error_per = 0
+            else:
+                peak_error = abs(source_peak-np.max(self.T_pre[source_mask]))
+                peak_error_per = peak_error/max(1e-12,np.max(self.T[source_mask]),np.max(self.T_pre[source_mask]))
 
         # 要求速度和三个热稳态指标连续多次同时达标
         stable = (velocity_error_per < velocity_tol and temperature_error_per < temperature_tol and
@@ -195,7 +200,10 @@ class controller:
     def report_performance(self):
         #统计最高温
         source_mask = self.source_delta_T > 0.0
-        heat_Peak_l=np.max(self.T[source_mask])
+        if not np.any(source_mask):
+            heat_Peak_l=0
+        else: 
+            heat_Peak_l=np.max(self.T[source_mask])
         heat_Peak_h=self.Tc+heat_Peak_l*(self.Th-self.Tc)
 
         #统计入口处压差

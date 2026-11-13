@@ -1,2 +1,6 @@
-# Ignore simulation data files
-*.dat
+# Ignore generated simulation outputs
+/outputs/
+
+# Ignore Python bytecode caches
+__pycache__/
+*.py[cod]
